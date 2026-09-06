@@ -23,6 +23,8 @@ This is a **code-modernization case study**, not an application. It contains:
   `modernize` holding the modernized code (commit `8733780`: `six` removed,
   `imghdr`→`flanker/_imagetype.py`, `setup.py`→`pyproject.toml`). Its output is
   byte-identical to `repos/flanker` across the corpus on Python 3.11 and 3.14.
+  This branch is published to the fork **`ash-171/flanker`** (remote `fork` in
+  `repos/flanker`); `mailgun/flanker` is upstream `origin`.
 
 There is no build/test/lint setup at the project root; the analysis work is
 Markdown, and the modernization work lives in `modernization/` + the worktree.

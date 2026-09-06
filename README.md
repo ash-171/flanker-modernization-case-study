@@ -8,6 +8,10 @@ net.
 address + MIME parsing library (~7k LOC, ~24k downloads/month, no release since
 2023, README disavows its own Python 3 build).
 
+**Modernized code:** [`ash-171/flanker` @ `modernize`](https://github.com/ash-171/flanker/tree/modernize)
+· [diff vs upstream](https://github.com/ash-171/flanker/compare/master...modernize)
+(a fork; this repo is the analysis + verification around it).
+
 ---
 
 ## Result
@@ -70,8 +74,11 @@ workflow — adapted to a small, same-language job. See
 | `modernization/patches/` | The modernization as a git patch + a plain diff. |
 | `CLAUDE.md` | Working notes for AI coding assistants on this repo. |
 
-The modernized flanker source itself is not vendored here — it is reproduced from
-the pinned upstream commit plus the patch (see below).
+The modernized flanker source itself is not vendored here. It lives on the
+[`modernize` branch of the `ash-171/flanker` fork](https://github.com/ash-171/flanker/tree/modernize)
+(GitHub renders the [full diff vs `mailgun:master`](https://github.com/ash-171/flanker/compare/master...modernize)),
+and is also reproducible from the pinned upstream commit plus the patch in
+`modernization/patches/` (see below).
 
 ---
 
@@ -80,12 +87,16 @@ the pinned upstream commit plus the patch (see below).
 Requires [`uv`](https://docs.astral.sh/uv/) (for pinned Python builds) and `git`.
 
 ```bash
-# 1. get the target at the exact analyzed commit, and a worktree to modernize
+# 1a. the pristine target at the exact analyzed commit
 git clone https://github.com/mailgun/flanker repos/flanker
 git -C repos/flanker checkout c7f7073
-git -C repos/flanker worktree add ../flanker-modern -b modernize
-git -C repos/flanker-modern apply ../../modernization/patches/flanker-modernize.full.diff
-git -C repos/flanker-modern add -A && git -C repos/flanker-modern commit -m "Modernize: drop Python 2 compat layer (Phase 1)"
+
+# 1b. the modernized code — either clone the fork branch ...
+git clone --branch modernize https://github.com/ash-171/flanker repos/flanker-modern
+
+#     ... or rebuild it locally from the patch (no fork needed):
+#   git -C repos/flanker worktree add ../flanker-modern -b modernize
+#   git -C repos/flanker-modern apply ../../modernization/patches/flanker-modernize.full.diff
 
 # 2. build both, characterize, compare
 bash modernization/run.sh
