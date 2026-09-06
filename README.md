@@ -12,6 +12,10 @@ address + MIME parsing library (~7k LOC, ~24k downloads/month, no release since
 · [diff vs upstream](https://github.com/ash-171/flanker/compare/master...modernize)
 (a fork; this repo is the analysis + verification around it).
 
+![Golden-master reproduce: bash modernization/run.sh builds the pristine and modernized libraries and confirms byte-identical output on Python 3.11 and 3.14](modernization/flanker-golden-master.gif)
+
+<sub>`bash modernization/run.sh` — clean rebuild of both libraries, characterize the corpus, diff. ([asciicast](modernization/flanker-golden-master.cast))</sub>
+
 ---
 
 ## Result
@@ -66,7 +70,7 @@ workflow — adapted to a small, same-language job. See
 | Path | What |
 | --- | --- |
 | [`CASE_STUDY.md`](CASE_STUDY.md) | The full analysis: why flanker, evidence of staleness, the GenAI method applied (§10), the prioritized roadmap. |
-| [`modernization/RESULTS.md`](modernization/RESULTS.md) | Run 1 write-up — exactly what changed and every comparison result. |
+| [`modernization/RESULTS.md`](modernization/RESULTS.md) | Run write-ups — run 1 (drop Python 2 / `six` / `setup.py`) and run 2 (`nose`→`pytest`): exactly what changed and every comparison result. |
 | `modernization/harness/characterize.py` | Runs flanker's public API over the corpus → deterministic golden-master JSON. |
 | `modernization/harness/compare.py` | Structural diff of two golden-master files. |
 | `modernization/run.sh` | One command: build both versions, characterize, compare. |
@@ -117,10 +121,12 @@ python modernization/harness/compare.py \
 
 - This is a **personal modernization exercise**. It is **not merged, adopted, or
   endorsed** by Mailgun.
-- Only **Phase 1** (the mechanical "translation" slice) is done. Not yet done:
-  `nose`→`pytest` port (Phase 0), type hints + `py.typed` (Phase 2), the `WebOb`
-  dependency audit and PLY-table regeneration story (Phase 3). See the roadmap
-  in `CASE_STUDY.md` §7.
+- **Phases 0–1** are done: the `nose`→`pytest` port (suite now runs green on
+  Python 3.11 and 3.14 — `255 passed, 6 skipped, 5 xfailed`) and the mechanical
+  "translation" slice (drop Python 2, remove `six`, `setup.py`→`pyproject.toml`).
+  Not yet done: type hints + `py.typed` (Phase 2), the `WebOb` dependency audit
+  and PLY-table regeneration story (Phase 3). See the roadmap in
+  `CASE_STUDY.md` §7.
 - "Byte-identical across the corpus" is a strong empirical result over ~428
   cases — it is evidence of behavioral equivalence, not a formal proof.
 

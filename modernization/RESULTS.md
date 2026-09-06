@@ -131,6 +131,10 @@ cd ..                     # project root
 bash modernization/run.sh
 ```
 
+`run.sh` recorded end-to-end (clean rebuild → characterize → diff, ~15s):
+[`flanker-golden-master.gif`](flanker-golden-master.gif) ·
+[`flanker-golden-master.cast`](flanker-golden-master.cast) (asciicast v2).
+
 or manually:
 
 ```bash

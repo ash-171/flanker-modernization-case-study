@@ -14,7 +14,7 @@ COMPARE="modernization/harness/compare.py"
 mkdir -p modernization/golden
 
 build() {  # <venv-dir> <python> <src>
-  uv venv --python "$2" "$1" >/dev/null
+  uv venv --clear --python "$2" "$1" >/dev/null
   uv pip install --quiet --python "$1/bin/python" -e "$3" >/dev/null
 }
 
