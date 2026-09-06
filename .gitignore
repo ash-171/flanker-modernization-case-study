@@ -1,0 +1,31 @@
+# virtualenvs (rebuilt by modernization/run.sh via uv)
+.venv-base/
+.venv-mod/
+.venv-base314/
+.venv-mod314/
+.venv/
+.venv-*/
+
+# cloned upstream repo + its modernize worktree
+# (recreated from the pinned SHA + patch — see README "Reproduce")
+/repos/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# editor / os
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# large regenerable py3.14 cross-check captures (see RESULTS.md; run.sh recreates)
+modernization/golden/baseline-py314.json
+modernization/golden/modern-py314.json

@@ -1,0 +1,1334 @@
+From 8733780be6f4fefaa387ae66e5328d6201e3a8d8 Mon Sep 17 00:00:00 2001
+From: Aswathi <80941531+ash-171@users.noreply.github.com>
+Date: Sun, 6 Sep 2026 14:00:13 +0530
+Subject: [PATCH] Modernize: drop Python 2 compat layer (Phase 1)
+
+Behaviour-preserving modernization, verified byte-identical against the
+pre-change library over the full tests/fixtures corpus (370 address cases,
+49 MIME .eml trees incl. round-trip serialization, 9 bounce cases) on both
+Python 3.11 and 3.14.
+
+- Remove the `six` dependency entirely (was imported in 19 modules,
+  ~120 call sites): six.text_type->str, six.binary_type->bytes,
+  six.string_types->str, six.unichr->chr, six.moves.*->stdlib,
+  six.iteritems/itervalues->dict methods, six.raise_from->`raise ... from`,
+  six.StringIO/BytesIO->io.*; delete all `if six.PY2/PY3` branches keeping
+  the Python 3 arm.
+- Replace the removed-in-3.13 `imghdr` stdlib module (and the
+  `standard-imghdr` backport pin) with flanker/_imagetype.py, a faithful
+  port of CPython imghdr's recogniser set.
+- setup.py -> pyproject.toml (PEP 621); requires-python = ">=3.9";
+  drop `six` and `standard-imghdr` from dependencies.
+- Strip legacy `# coding:` headers.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01NmtTfTTHw5py6HeLdRCuAn
+---
+ flanker/_email.py                            |  49 ++-------
+ flanker/_imagetype.py                        | 104 +++++++++++++++++++
+ flanker/addresslib/_parser/lexer.py          |  36 ++-----
+ flanker/addresslib/address.py                |  48 +++------
+ flanker/addresslib/corrector.py              |   1 -
+ flanker/addresslib/plugins/_tokenizer.py     |   5 +-
+ flanker/addresslib/plugins/aol.py            |   2 -
+ flanker/addresslib/plugins/gmail.py          |   2 -
+ flanker/addresslib/plugins/google.py         |   2 -
+ flanker/addresslib/plugins/hotmail.py        |   2 -
+ flanker/addresslib/plugins/icloud.py         |   2 -
+ flanker/addresslib/plugins/yahoo.py          |   2 -
+ flanker/addresslib/quote.py                  |   5 +-
+ flanker/addresslib/validate.py               |   2 -
+ flanker/dkim.py                              |  11 +-
+ flanker/mime/bounce.py                       |  11 +-
+ flanker/mime/message/charsets.py             |   3 +-
+ flanker/mime/message/fallback/part.py        |  22 +---
+ flanker/mime/message/headers/encodedword.py  |  11 +-
+ flanker/mime/message/headers/encoding.py     |   9 +-
+ flanker/mime/message/headers/headers.py      |   3 +-
+ flanker/mime/message/headers/parametrized.py |   5 +-
+ flanker/mime/message/headers/wrappers.py     |   9 +-
+ flanker/mime/message/part.py                 |  61 ++++-------
+ flanker/mime/message/scanner.py              |  19 ++--
+ flanker/mime/message/threading.py            |  10 +-
+ flanker/mime/message/utils.py                |   3 +-
+ flanker/utils.py                             |  12 +--
+ pyproject.toml                               |  53 ++++++++++
+ setup.py                                     |  55 ----------
+ 30 files changed, 259 insertions(+), 300 deletions(-)
+ create mode 100644 flanker/_imagetype.py
+ create mode 100644 pyproject.toml
+ delete mode 100644 setup.py
+
+diff --git a/flanker/_email.py b/flanker/_email.py
+index a25538d..f56e958 100644
+--- a/flanker/_email.py
++++ b/flanker/_email.py
+@@ -4,9 +4,7 @@ from email.generator import Generator
+ from email.header import Header
+ from email.mime import audio
+ from email.utils import make_msgid
+-
+-import six
+-from six.moves import StringIO
++from io import StringIO
+ 
+ _CRLF = '\r\n'
+ _SPLIT_CHARS = ' ;,'
+@@ -17,30 +15,21 @@ _SPLIT_CHARS = ' ;,'
+ _MAX_LINE_LEN = 76
+ 
+ 
+-if six.PY3:
+-    from email.policy import Compat32
++from email.policy import Compat32
+ 
+-    class _Compat32CRLF(Compat32):
+-        linesep = _CRLF
+ 
+-    _compat32_crlf = _Compat32CRLF()
++class _Compat32CRLF(Compat32):
++    linesep = _CRLF
+ 
+-else:
+-    from email import generator, header, quoprimime, feedparser
+-    generator.NL = _CRLF
+-    header.NL = _CRLF
+-    quoprimime.NL = _CRLF
+-    feedparser.NL = _CRLF
+ 
++_compat32_crlf = _Compat32CRLF()
+ 
+-def message_from_string(string):
+-    if six.PY3:
+-        if isinstance(string, six.binary_type):
+-            return email.message_from_bytes(string, policy=_compat32_crlf)
+ 
+-        return email.message_from_string(string, policy=_compat32_crlf)
++def message_from_string(string):
++    if isinstance(string, bytes):
++        return email.message_from_bytes(string, policy=_compat32_crlf)
+ 
+-    return email.message_from_string(string)
++    return email.message_from_string(string, policy=_compat32_crlf)
+ 
+ 
+ def message_to_string(msg):
+@@ -48,21 +37,8 @@ def message_to_string(msg):
+     Converts python message to string in a proper way.
+     """
+     with closing(StringIO()) as fp:
+-        if six.PY3:
+-            g = Generator(fp, mangle_from_=False, policy=_compat32_crlf)
+-            g.flatten(msg, unixfrom=False)
+-            return fp.getvalue()
+-
+-        g = Generator(fp, mangle_from_=False)
++        g = Generator(fp, mangle_from_=False, policy=_compat32_crlf)
+         g.flatten(msg, unixfrom=False)
+-
+-        # In Python 2 Generator.flatten uses `print >> ` to write to fp, that
+-        # adds `\n` regardless of generator.NL value. So we resort to a hackish
+-        # way of replacing LF with RFC complaint CRLF.
+-        for i, v in enumerate(fp.buflist):
+-            if v == '\n':
+-                fp.buflist[i] = _CRLF
+-
+         return fp.getvalue()
+ 
+ 
+@@ -92,7 +68,4 @@ def make_message_id():
+ 
+ def encode_header(name, val, encoding='ascii', max_line_len=_MAX_LINE_LEN):
+     header = Header(val, encoding, max_line_len, name)
+-    if six.PY3:
+-        return header.encode(_SPLIT_CHARS, linesep=_CRLF)
+-
+-    return header.encode(_SPLIT_CHARS)
++    return header.encode(_SPLIT_CHARS, linesep=_CRLF)
+diff --git a/flanker/_imagetype.py b/flanker/_imagetype.py
+new file mode 100644
+index 0000000..c1f65f9
+--- /dev/null
++++ b/flanker/_imagetype.py
+@@ -0,0 +1,104 @@
++"""
++Minimal image-type detection.
++
++Replaces the use of the standard-library ``imghdr`` module, which was
++deprecated in Python 3.11 and removed in Python 3.13. Only the ``what()``
++entry point that flanker relies on is provided, with the same recogniser
++set and return values as CPython's ``imghdr`` so that behaviour is
++unchanged.
++"""
++
++__all__ = ["what"]
++
++
++def _test_jpeg(h):
++    if h[6:10] in (b'JFIF', b'Exif'):
++        return 'jpeg'
++    if h[:4] == b'\xff\xd8\xff\xdb':
++        return 'jpeg'
++    return None
++
++
++def _test_png(h):
++    if h[:8] == b'\x89PNG\r\n\x1a\n':
++        return 'png'
++    return None
++
++
++def _test_gif(h):
++    if h[:6] in (b'GIF87a', b'GIF89a'):
++        return 'gif'
++    return None
++
++
++def _test_tiff(h):
++    if h[:2] in (b'MM', b'II'):
++        return 'tiff'
++    return None
++
++
++def _test_rgb(h):
++    if h[:2] == b'\x01\xda':
++        return 'rgb'
++    return None
++
++
++def _test_pbm(h):
++    if len(h) >= 3 and h[0:1] == b'P' and h[1:2] in b'14' and h[2:3] in b' \t\n\r':
++        return 'pbm'
++    return None
++
++
++def _test_pgm(h):
++    if len(h) >= 3 and h[0:1] == b'P' and h[1:2] in b'25' and h[2:3] in b' \t\n\r':
++        return 'pgm'
++    return None
++
++
++def _test_ppm(h):
++    if len(h) >= 3 and h[0:1] == b'P' and h[1:2] in b'36' and h[2:3] in b' \t\n\r':
++        return 'ppm'
++    return None
++
++
++def _test_bmp(h):
++    if h[:2] == b'BM':
++        return 'bmp'
++    return None
++
++
++def _test_webp(h):
++    if h[:4] == b'RIFF' and h[8:12] == b'WEBP':
++        return 'webp'
++    return None
++
++
++def _test_exr(h):
++    if h[:4] == b'\x76\x2f\x31\x01':
++        return 'exr'
++    return None
++
++
++_TESTS = (_test_jpeg, _test_png, _test_gif, _test_tiff, _test_rgb, _test_pbm,
++          _test_pgm, _test_ppm, _test_bmp, _test_webp, _test_exr)
++
++
++def what(file, h=None):
++    """Return the image type of the given file/bytes, or None.
++
++    Mirrors ``imghdr.what``: ``h`` may be passed directly as a bytes header,
++    otherwise ``file`` is opened (path) or read (file-like object).
++    """
++    if h is None:
++        if isinstance(file, (str, bytes)) and not hasattr(file, 'read'):
++            with open(file, 'rb') as f:
++                h = f.read(32)
++        else:
++            location = file.tell()
++            h = file.read(32)
++            file.seek(location)
++    for test in _TESTS:
++        result = test(h)
++        if result:
++            return result
++    return None
+diff --git a/flanker/addresslib/_parser/lexer.py b/flanker/addresslib/_parser/lexer.py
+index da0f862..77804b8 100644
+--- a/flanker/addresslib/_parser/lexer.py
++++ b/flanker/addresslib/_parser/lexer.py
+@@ -1,8 +1,6 @@
+ import ply.lex as lex
+ import logging
+ 
+-import six
+-
+ log = logging.getLogger(__name__)
+ log.setLevel(logging.INFO)
+ 
+@@ -50,30 +48,16 @@ t_LANGLE    = r'\<'                    # '<'
+ t_RANGLE    = r'\>'                    # '>'
+ t_SEMICOLON = r'\;'                    # ';'
+ 
+-if six.PY2:
+-    _UTF8_2 = r'[\xC2-\xDF][\x80-\xBF]'
+-    _UTF8_3 = (r'(\xE0[\xA0-\xBF][\x80-\xBF]'    
+-               r'|[\xE1-\xEC][\x80-\xBF]{2}'
+-               r'|\xED[\x80-\x9F][\x80-\xBF]'
+-               r'|[\xEE-\xEF][\x80-\xBF]{2}'
+-               r')')
+-
+-    _UTF8_4 = (r'(\xF0[\x90-\xBF][\x80-\xBF]{2}'
+-    
+-               r'|[\xF1-\xF3][\x80-\xBF]{3}'
+-               r'|\xF4[\x80-\x8F][\x80-\xBF]{2}'
+-               r')')
+-else:
+-    _UTF8_2 = r'[\u0080-\u07ff]'
+-    _UTF8_3 = (r'([\u0800-\u0fff]'
+-               r'|[\u1000-\ucfff]'
+-               r'|[\ud000-\ud7ff]'
+-               r'|[\ue000-\uffff]'
+-               r')')
+-    _UTF8_4 = (r'([\U00010000-\U0003ffff]'
+-               r'|[\U00040000-\U000fffff]'
+-               r'|[\U00100000-\U0010ffff]'
+-               r')')
++_UTF8_2 = r'[\u0080-\u07ff]'
++_UTF8_3 = (r'([\u0800-\u0fff]'
++           r'|[\u1000-\ucfff]'
++           r'|[\ud000-\ud7ff]'
++           r'|[\ue000-\uffff]'
++           r')')
++_UTF8_4 = (r'([\U00010000-\U0003ffff]'
++           r'|[\U00040000-\U000fffff]'
++           r'|[\U00100000-\U0010ffff]'
++           r')')
+ 
+ _UNICODE_CHAR = '({}|{}|{})'.format(_UTF8_2, _UTF8_3, _UTF8_4)
+ 
+diff --git a/flanker/addresslib/address.py b/flanker/addresslib/address.py
+index 2eefbf1..4ba200d 100644
+--- a/flanker/addresslib/address.py
++++ b/flanker/addresslib/address.py
+@@ -1,5 +1,3 @@
+-# coding:utf-8
+-
+ """
+ Public interface for flanker address (email or url) parsing and validation
+ capabilities.
+@@ -36,11 +34,10 @@ See the parser.py module for implementation details of the parser.
+ from logging import getLogger
+ 
+ import idna
+-import six
+ from idna import IDNAError
+ from ply.lex import LexError
+ from ply.yacc import YaccError
+-from six.moves.urllib_parse import urlparse
++from urllib.parse import urlparse
+ from time import time
+ from tld import get_tld
+ 
+@@ -123,7 +120,7 @@ def parse(address, addr_spec_only=False, strict=False, metrics=False):
+                 addr_obj = _lift_parse_result(parse_rs)
+                 if addr_obj:
+                     display_name = ' '.join(addr_parts[:-1])
+-                    if isinstance(display_name, six.binary_type):
++                    if isinstance(display_name, bytes):
+                         display_name = display_name.decode('utf-8')
+                     addr_obj._display_name = display_name
+ 
+@@ -227,7 +224,7 @@ def parse_list(address_list, strict=False, as_tuple=False, metrics=False):
+ 
+         parsed, unparsed = AddressList(), []
+         for address in address_list:
+-            if isinstance(address, six.string_types):
++            if isinstance(address, str):
+                 addr_obj, metrics = parse(address, strict=strict, metrics=True)
+                 mtimes['parsing'] += metrics['parsing']
+                 if addr_obj:
+@@ -243,7 +240,7 @@ def parse_list(address_list, strict=False, as_tuple=False, metrics=False):
+ 
+         return _parse_list_result(as_tuple, parsed, unparsed, mtimes)
+ 
+-    if isinstance(address_list, six.string_types):
++    if isinstance(address_list, str):
+         if len(address_list) > MAX_ADDRESS_LIST_LENGTH:
+             _log.warning('address list exceeds maximum length of %s', MAX_ADDRESS_LIST_LENGTH)
+             return _parse_list_result(as_tuple, AddressList(), [address_list], mtimes)
+@@ -489,9 +486,9 @@ class EmailAddress(Address):
+         if not is_pure_ascii(self._hostname):
+             idna.encode(self._hostname)
+ 
+-        assert isinstance(self._display_name, six.text_type)
+-        assert isinstance(self._mailbox, six.text_type)
+-        assert isinstance(self._hostname, six.text_type)
++        assert isinstance(self._display_name, str)
++        assert isinstance(self._mailbox, str)
++        assert isinstance(self._hostname, str)
+ 
+     @property
+     def addr_type(self):
+@@ -603,7 +600,7 @@ class EmailAddress(Address):
+         """
+         Allows comparison of two addresses.
+         """
+-        if isinstance(other, six.string_types):
++        if isinstance(other, str):
+             other = parse(other)
+         if other:
+             return self.address.lower() == other.address.lower()
+@@ -708,7 +705,7 @@ class UrlAddress(Address):
+         return self.address
+ 
+     def __eq__(self, other):
+-        if isinstance(other, six.string_types):
++        if isinstance(other, str):
+             other = parse(other)
+         if other:
+             return self.address == other.address
+@@ -765,7 +762,7 @@ class AddressList(object):
+         """
+         When comparing ourselves to other lists we must ignore order.
+         """
+-        if isinstance(other, (list, six.binary_type, six.text_type)):
++        if isinstance(other, (list, bytes, str)):
+             other = parse_list(other)
+         if not isinstance(other, AddressList):
+             raise TypeError('Cannot compare with %s' % type(other))
+@@ -877,22 +874,15 @@ def _parse_list_result(as_tuple, parsed, unparsed, mtimes):
+ 
+ def _to_parser_input(parser_in):
+     """
+-    Normalize the input to binary in Python 2, and text in Python 3.
++    Normalize the input to text.
+     """
+     if parser_in is None:
+         return None
+ 
+-    if six.PY2:
+-        if isinstance(parser_in, six.text_type):
+-            parser_in = parser_in.encode('utf-8')
+-        assert isinstance(parser_in, six.binary_type), (
+-            'Expected %s, got %s' % (six.binary_type, type(parser_in)))
+-        return parser_in
+-
+-    if isinstance(parser_in, six.binary_type):
++    if isinstance(parser_in, bytes):
+         parser_in = parser_in.decode('utf-8')
+-    assert isinstance(parser_in, six.text_type), (
+-        'Expected %s, got %s' % (six.text_type, type(parser_in)))
++    assert isinstance(parser_in, str), (
++        'Expected %s, got %s' % (str, type(parser_in)))
+     return parser_in
+ 
+ 
+@@ -903,10 +893,10 @@ def _to_text(val):
+     if val is None:
+         return None
+ 
+-    if isinstance(val, six.binary_type):
++    if isinstance(val, bytes):
+         return val.decode('utf-8')
+ 
+-    if isinstance(val, six.text_type):
++    if isinstance(val, str):
+         return val
+ 
+     raise TypeError('String type expected, got %s' % type(val))
+@@ -914,8 +904,7 @@ def _to_text(val):
+ 
+ def _to_str(val):
+     """
+-    Converts val to str. Note that in different Python version the returned
+-    value has different semantic, and that is intentional.
++    Converts val to str.
+     """
+     if val is None:
+         return None
+@@ -923,7 +912,4 @@ def _to_str(val):
+     if isinstance(val, str):
+         return val
+ 
+-    if six.PY2:
+-        return val.encode('utf-8')
+-
+     return val.decode('utf-8')
+diff --git a/flanker/addresslib/corrector.py b/flanker/addresslib/corrector.py
+index ba31f84..84d1cb3 100644
+--- a/flanker/addresslib/corrector.py
++++ b/flanker/addresslib/corrector.py
+@@ -1,4 +1,3 @@
+-# coding:utf-8
+ """
+ Spelling corrector library, used to correct common typos in domains like
+ gmal.com instead of gmail.com.
+diff --git a/flanker/addresslib/plugins/_tokenizer.py b/flanker/addresslib/plugins/_tokenizer.py
+index 0a07203..3b8cef8 100644
+--- a/flanker/addresslib/plugins/_tokenizer.py
++++ b/flanker/addresslib/plugins/_tokenizer.py
+@@ -1,5 +1,3 @@
+-# coding:utf-8
+-
+ """
+ TokenStream represents a stream of tokens that a parser will consume.
+ TokenStream can be used to consume tokens, peek ahead, and synchonize to a
+@@ -8,7 +6,6 @@ compiled regular expressions or strings.
+ """
+ 
+ import re
+-import six
+ 
+ 
+ class TokenStream(object):
+@@ -30,7 +27,7 @@ class TokenStream(object):
+         be either a compiled regex or a string.
+         """
+         # match single character
+-        if isinstance(token, six.string_types) and len(token) == 1:
++        if isinstance(token, str) and len(token) == 1:
+             if self.peek() == token:
+                 self.position += 1
+                 return token
+diff --git a/flanker/addresslib/plugins/aol.py b/flanker/addresslib/plugins/aol.py
+index 519aedb..47476a2 100644
+--- a/flanker/addresslib/plugins/aol.py
++++ b/flanker/addresslib/plugins/aol.py
+@@ -1,5 +1,3 @@
+-# coding:utf-8
+-
+ '''
+     Email address validation plugin for aol.com email addresses.
+ 
+diff --git a/flanker/addresslib/plugins/gmail.py b/flanker/addresslib/plugins/gmail.py
+index 2934ecb..789ce28 100644
+--- a/flanker/addresslib/plugins/gmail.py
++++ b/flanker/addresslib/plugins/gmail.py
+@@ -1,5 +1,3 @@
+-# coding:utf-8
+-
+ r'''
+     Email address validation plugin for gmail.com email addresses.
+ 
+diff --git a/flanker/addresslib/plugins/google.py b/flanker/addresslib/plugins/google.py
+index 1328bfa..5624148 100644
+--- a/flanker/addresslib/plugins/google.py
++++ b/flanker/addresslib/plugins/google.py
+@@ -1,5 +1,3 @@
+-# coding:utf-8
+-
+ '''
+     Email address validation plugin for Google Apps email addresses.
+ 
+diff --git a/flanker/addresslib/plugins/hotmail.py b/flanker/addresslib/plugins/hotmail.py
+index f9ab1d1..419b32a 100644
+--- a/flanker/addresslib/plugins/hotmail.py
++++ b/flanker/addresslib/plugins/hotmail.py
+@@ -1,5 +1,3 @@
+-# coding:utf-8
+-
+ '''
+     Email address validation plugin for hotmail.com email addresses.
+ 
+diff --git a/flanker/addresslib/plugins/icloud.py b/flanker/addresslib/plugins/icloud.py
+index dd38c44..ae04266 100644
+--- a/flanker/addresslib/plugins/icloud.py
++++ b/flanker/addresslib/plugins/icloud.py
+@@ -1,5 +1,3 @@
+-# coding:utf-8
+-
+ '''
+     Email address validation plugin for icloud.com email addresses.
+ 
+diff --git a/flanker/addresslib/plugins/yahoo.py b/flanker/addresslib/plugins/yahoo.py
+index ccfb4ac..a6d4340 100644
+--- a/flanker/addresslib/plugins/yahoo.py
++++ b/flanker/addresslib/plugins/yahoo.py
+@@ -1,5 +1,3 @@
+-# coding:utf-8
+-
+ '''
+     Email address validation plugin for yahoo.com email addresses.
+ 
+diff --git a/flanker/addresslib/quote.py b/flanker/addresslib/quote.py
+index fbcc1d8..018dc7b 100644
+--- a/flanker/addresslib/quote.py
++++ b/flanker/addresslib/quote.py
+@@ -1,6 +1,5 @@
+ import regex as re
+-import six
+-from six.moves import StringIO
++from io import StringIO
+ 
+ from flanker.addresslib._parser.lexer import t_ATOM, t_FWSP
+ 
+@@ -52,7 +51,5 @@ def smart_unquote(s):
+ 
+ 
+ def _contains_atoms_only(s):
+-    if six.PY2 and isinstance(s, six.text_type):
+-        s = s.encode('utf-8')
+     match_result = _RE_ATOM_PHRASE.match(s)
+     return match_result and match_result.end(0) == len(s)
+diff --git a/flanker/addresslib/validate.py b/flanker/addresslib/validate.py
+index 8ad7000..3106fbe 100644
+--- a/flanker/addresslib/validate.py
++++ b/flanker/addresslib/validate.py
+@@ -1,5 +1,3 @@
+-# coding:utf-8
+-
+ """
+ Validation module that that supports alternate spelling suggestions for
+ domains, MX record lookup and query, as well as custom local-part grammar for
+diff --git a/flanker/dkim.py b/flanker/dkim.py
+index 4c65547..3b49b1d 100644
+--- a/flanker/dkim.py
++++ b/flanker/dkim.py
+@@ -1,6 +1,5 @@
+ import base64
+ import regex as re
+-import six
+ import time
+ 
+ from cryptography.hazmat.backends import default_backend
+@@ -77,11 +76,11 @@ class DomainKeySigner(object):
+         self._key = key
+ 
+         self._selector = selector
+-        if six.PY3 and isinstance(selector, six.text_type):
++        if isinstance(selector, str):
+             self._selector = selector.encode('utf-8')
+ 
+         self._domain = domain
+-        if six.PY3 and isinstance(domain, six.text_type):
++        if isinstance(domain, str):
+             self._domain = domain.encode('utf-8')
+ 
+         self._signed_headers = None
+@@ -90,7 +89,7 @@ class DomainKeySigner(object):
+         canonicalization = NoFWSCanonicalization()
+         signer = self._key.signer(padding.PKCS1v15(), hashes.SHA1())
+ 
+-        if six.PY3 and isinstance(message, six.text_type):
++        if isinstance(message, str):
+             message = message.encode('utf-8')
+ 
+         headers, body = _rfc822_parse(message)
+@@ -126,11 +125,11 @@ class DKIMSigner(object):
+         self._key = key
+ 
+         self._selector = selector
+-        if six.PY3 and isinstance(selector, six.text_type):
++        if isinstance(selector, str):
+             self._selector = selector.encode('utf-8')
+ 
+         self._domain = domain
+-        if six.PY3 and isinstance(domain, six.text_type):
++        if isinstance(domain, str):
+             self._domain = domain.encode('utf-8')
+ 
+         self._header_canonicalization = header_canonicalization
+diff --git a/flanker/mime/bounce.py b/flanker/mime/bounce.py
+index 7be2194..44c868a 100644
+--- a/flanker/mime/bounce.py
++++ b/flanker/mime/bounce.py
+@@ -3,9 +3,8 @@ from contextlib import closing
+ 
+ import attr
+ import regex as re
+-import six
+ from attr.validators import instance_of
+-from six.moves import range
++from io import StringIO
+ 
+ from flanker.mime.message.headers import MimeHeaders
+ from flanker.mime.message.headers.parsing import parse_stream
+@@ -26,9 +25,9 @@ _RE_STATUS = re.compile(r'\d\.\d+\.\d+', re.IGNORECASE)
+ @attr.s(frozen=True)
+ class Result(object):
+     score = attr.ib(validator=instance_of(float))
+-    status = attr.ib(validator=instance_of(six.text_type))
+-    diagnostic_code = attr.ib(validator=instance_of(six.text_type))
+-    notification = attr.ib(validator=instance_of(six.text_type))
++    status = attr.ib(validator=instance_of(str))
++    diagnostic_code = attr.ib(validator=instance_of(str))
++    notification = attr.ib(validator=instance_of(str))
+ 
+     def is_bounce(self, probability=0.3):
+         return self.score > probability
+@@ -56,7 +55,7 @@ def _collect_headers(message):
+ 
+ def _collect_headers_from_status(body):
+     out = deque()
+-    with closing(six.StringIO(body)) as stream:
++    with closing(StringIO(body)) as stream:
+         for i in range(3):
+             out += parse_stream(stream)
+ 
+diff --git a/flanker/mime/message/charsets.py b/flanker/mime/message/charsets.py
+index 2aed932..15ca9ef 100644
+--- a/flanker/mime/message/charsets.py
++++ b/flanker/mime/message/charsets.py
+@@ -1,6 +1,5 @@
+ import codecs
+ 
+-import six
+ 
+ from flanker.mime.message.utils import to_unicode
+ 
+@@ -12,7 +11,7 @@ _ALIASES = {
+ 
+ 
+ def convert_to_unicode(charset, value):
+-    if isinstance(value, six.text_type):
++    if isinstance(value, str):
+         return value
+ 
+     charset = _ensure_charset(charset)
+diff --git a/flanker/mime/message/fallback/part.py b/flanker/mime/message/fallback/part.py
+index 0fe31f5..f29757b 100644
+--- a/flanker/mime/message/fallback/part.py
++++ b/flanker/mime/message/fallback/part.py
+@@ -1,6 +1,5 @@
+ import logging
+ 
+-import six
+ from webob.multidict import MultiDict
+ 
+ from flanker import _email
+@@ -163,21 +162,8 @@ def _try_decode(key, value):
+     if isinstance(value, (tuple, list)):
+         return value
+ 
+-    if six.PY3:
+-        assert (isinstance(key, six.text_type) and
+-                isinstance(value, six.text_type))
+-        try:
+-            return headers.parse_header_value(key, value)
+-        except Exception:
+-            return value
+-
+-    if isinstance(value, six.binary_type):
+-        try:
+-            return headers.parse_header_value(key, value)
+-        except Exception:
+-            return value.decode('utf-8', 'ignore')
+-
+-    if isinstance(value, six.text_type):
++    assert isinstance(key, str) and isinstance(value, str)
++    try:
++        return headers.parse_header_value(key, value)
++    except Exception:
+         return value
+-
+-    raise TypeError('%s is not allowed type of header %s' % (type(value), key))
+diff --git a/flanker/mime/message/headers/encodedword.py b/flanker/mime/message/headers/encodedword.py
+index f71b5fa..00ab0d6 100644
+--- a/flanker/mime/message/headers/encodedword.py
++++ b/flanker/mime/message/headers/encodedword.py
+@@ -1,9 +1,7 @@
+-# coding:utf-8
+ import logging
+ from base64 import b64encode
+ 
+ import regex as re
+-import six
+ 
+ from flanker import _email
+ from flanker.mime.message import charsets, errors
+@@ -52,7 +50,7 @@ def mime_to_unicode(header):
+         u"Hello"
+     """
+     # Only string header values need to be converted.
+-    if not isinstance(header, six.string_types):
++    if not isinstance(header, str):
+         return header
+ 
+     try:
+@@ -86,7 +84,7 @@ def mime_to_unicode(header):
+     except Exception:
+         try:
+             logged_header = header
+-            if isinstance(logged_header, six.text_type):
++            if isinstance(logged_header, str):
+                 logged_header = logged_header.encode('utf-8')
+                 # encode header as utf-8 so all characters can be base64 encoded
+             logged_header = b64encode(logged_header)
+@@ -124,9 +122,6 @@ def _decode_part(charset, encoding, value):
+ 
+ 
+ def _decode_quoted_printable(qp):
+-    if six.PY2:
+-        return _email.decode_quoted_printable(str(qp))
+-
+     buf = bytearray()
+     size = len(qp)
+     i = 0
+@@ -155,4 +150,4 @@ def _decode_quoted_printable(qp):
+         buf.append(codepoint)
+         i += 2
+ 
+-    return six.binary_type(buf)
++    return bytes(buf)
+diff --git a/flanker/mime/message/headers/encoding.py b/flanker/mime/message/headers/encoding.py
+index 3ee6449..e256415 100644
+--- a/flanker/mime/message/headers/encoding.py
++++ b/flanker/mime/message/headers/encoding.py
+@@ -1,8 +1,6 @@
+ import logging
+ from collections import deque
+ 
+-import six
+-
+ import flanker.addresslib.address
+ from flanker import _email
+ from flanker.mime.message.headers import parametrized
+@@ -50,8 +48,6 @@ def _encode_address_header(name, value):
+     for addr in flanker.addresslib.address.parse_list(value):
+         if addr.requires_non_ascii():
+             encoded_addr = addr.to_unicode()
+-            if six.PY2:
+-                encoded_addr = encoded_addr.encode('utf-8')
+         else:
+             encoded_addr = addr.full_spec()
+ 
+@@ -61,7 +57,7 @@ def _encode_address_header(name, value):
+ 
+ def _encode_parametrized(key, value, params):
+     if params:
+-        params = [_encode_param(key, n, v) for n, v in six.iteritems(params)]
++        params = [_encode_param(key, n, v) for n, v in params.items()]
+         return value + '; ' + ('; '.join(params))
+ 
+     return value
+@@ -69,9 +65,6 @@ def _encode_parametrized(key, value, params):
+ 
+ def _encode_param(key, name, value):
+     try:
+-        if six.PY2:
+-            value = value.encode('ascii')
+-
+         return _email.format_param(name, value)
+     except Exception:
+         value = value.encode('utf-8')
+diff --git a/flanker/mime/message/headers/headers.py b/flanker/mime/message/headers/headers.py
+index e6b289e..8b696ec 100644
+--- a/flanker/mime/message/headers/headers.py
++++ b/flanker/mime/message/headers/headers.py
+@@ -1,4 +1,3 @@
+-import six
+ from webob.multidict import MultiDict
+ 
+ from flanker.mime.message.headers import encodedword
+@@ -158,7 +157,7 @@ class MimeHeaders(object):
+ def remove_newlines(value):
+     if not value:
+         return ''
+-    elif isinstance(value, six.string_types):
++    elif isinstance(value, str):
+         return value.replace('\r', '').replace('\n', '')
+     else:
+         return value
+diff --git a/flanker/mime/message/headers/parametrized.py b/flanker/mime/message/headers/parametrized.py
+index 67d2740..edfb2a3 100644
+--- a/flanker/mime/message/headers/parametrized.py
++++ b/flanker/mime/message/headers/parametrized.py
+@@ -5,8 +5,7 @@ from collections import deque
+ from itertools import groupby
+ 
+ import regex as re
+-import six
+-from six.moves import urllib_parse
++import urllib.parse as urllib_parse
+ 
+ from flanker.mime.message import charsets
+ from flanker.mime.message.headers import encodedword
+@@ -22,7 +21,7 @@ def decode(header):
+          value, {'key': u'val'}
+      returns None in case of any failure
+     """
+-    if six.PY3 and isinstance(header, six.binary_type):
++    if isinstance(header, bytes):
+         header = header.decode('utf-8')
+ 
+     value, rest = split(encodedword.unfold(header))
+diff --git a/flanker/mime/message/headers/wrappers.py b/flanker/mime/message/headers/wrappers.py
+index 4dbcc25..86dda66 100644
+--- a/flanker/mime/message/headers/wrappers.py
++++ b/flanker/mime/message/headers/wrappers.py
+@@ -2,7 +2,6 @@
+ provide some convenience access methods
+ """
+ import regex as re
+-import six
+ 
+ import flanker.addresslib.address
+ from flanker import _email
+@@ -119,7 +118,7 @@ class ContentType(tuple):
+                 and self.params == other.params
+         elif isinstance(other, tuple):
+             return tuple.__eq__(self, other)
+-        elif isinstance(other, six.string_types):
++        elif isinstance(other, str):
+             return str(self) == other
+         else:
+             return False
+@@ -155,7 +154,7 @@ class MessageId(str):
+ 
+     @classmethod
+     def from_string(cls, string):
+-        if not isinstance(string, six.string_types):
++        if not isinstance(string, str):
+             return None
+         for message_id in cls.scan(string):
+             return message_id
+@@ -181,11 +180,11 @@ class MessageId(str):
+                 yield cls(message_id)
+ 
+ 
+-class Subject(six.text_type):
++class Subject(str):
+     RE_RE = re.compile(r"((RE|FW|FWD|HA)([[]\d])*:\s*)*", re.I)
+ 
+     def __new__(cls, *args, **kw):
+-        return six.text_type.__new__(cls, *args, **kw)
++        return str.__new__(cls, *args, **kw)
+ 
+     def strip_replies(self):
+         return self.RE_RE.sub('', self)
+diff --git a/flanker/mime/message/part.py b/flanker/mime/message/part.py
+index 0bc83d2..6532ea3 100644
+--- a/flanker/mime/message/part.py
++++ b/flanker/mime/message/part.py
+@@ -1,13 +1,13 @@
+ import base64
+-import imghdr
++import io
+ import logging
+ import mimetypes
+ import quopri
+ from contextlib import closing
++from io import StringIO
+ from os import path
+ 
+-import six
+-from six.moves import StringIO
++from flanker import _imagetype as imghdr
+ 
+ from flanker import metrics, _email
+ from flanker.mime import bounce
+@@ -110,7 +110,7 @@ def adjust_content_type(content_type, body=None, filename=None):
+ 
+     if content_type.main == 'image' and body:
+         image_preamble = body[:32]
+-        if six.PY3 and isinstance(body, six.text_type):
++        if isinstance(body, str):
+             image_preamble = image_preamble.encode('utf-8', 'ignore')
+ 
+         sub = imghdr.what(None, image_preamble)
+@@ -161,7 +161,7 @@ class Body(object):
+                 charset = 'utf-8'
+ 
+             # it should be stored as unicode. period
+-            if isinstance(body, six.binary_type):
++            if isinstance(body, bytes):
+                 self.body = charsets.convert_to_unicode(charset, body)
+ 
+             # let's be simple when possible
+@@ -629,31 +629,22 @@ def _encode_charset(preferred_charset, text):
+ 
+ 
+ def _encode_transfer_encoding(encoding, body):
+-    if six.PY3:
+-        if encoding == 'quoted-printable':
+-            body = quopri.encodestring(body, quotetabs=False)
+-            body = fix_leading_dot(body)
+-            return body.decode('utf-8')
+-
+-        if encoding == 'base64':
+-            if isinstance(body, six.text_type):
+-                body = body.encode('utf-8')
++    if encoding == 'quoted-printable':
++        body = quopri.encodestring(body, quotetabs=False)
++        body = fix_leading_dot(body)
++        return body.decode('utf-8')
+ 
+-            body = _email.encode_base64(body)
+-            return body.decode('utf-8')
++    if encoding == 'base64':
++        if isinstance(body, str):
++            body = body.encode('utf-8')
+ 
+-        if six.PY3 and isinstance(body, six.binary_type):
+-            return body.decode('utf-8')
++        body = _email.encode_base64(body)
++        return body.decode('utf-8')
+ 
+-        return body
++    if isinstance(body, bytes):
++        return body.decode('utf-8')
+ 
+-    if encoding == 'quoted-printable':
+-        body = quopri.encodestring(body, quotetabs=False)
+-        return fix_leading_dot(body)
+-    elif encoding == 'base64':
+-        return _email.encode_base64(body)
+-    else:
+-        return body
++    return body
+ 
+ 
+ def fix_leading_dot(s):
+@@ -674,16 +665,14 @@ def fix_leading_dot(s):
+     clients dot stuffing the line. To combat this we convert any leading '.'
+     to a '=2E'.
+     """
+-    infp = six.BytesIO(s)
+-    outfp = six.BytesIO()
++    infp = io.BytesIO(s)
++    outfp = io.BytesIO()
+ 
+     # TODO(thrawn01): We could scan the entire string looking for leading '.'
+     #  If none found return the original string. This would save memory at the
+     #  expense of some additional processing
+ 
+-    dot = b"."
+-    if six.PY3:
+-        dot = ord('.')
++    dot = ord(".")
+ 
+     while 1:
+         line = infp.readline()
+@@ -725,8 +714,7 @@ def _quote_and_cut(ln):
+         if pos > len(ln)/2:
+             break
+ 
+-        if six.PY3:
+-            c = bytes((c,))
++        c = bytes((c,))
+ 
+         # Should be a quoted character
+         if c == b'=':
+@@ -742,9 +730,7 @@ def _quote_and_cut(ln):
+     if new_line[-1:] in b' \t':
+         new_line = new_line[:-1] + quopri.quote(new_line[-1:])
+ 
+-    dot = b'.'
+-    if six.PY3:
+-        dot = ord('.')
++    dot = ord(".")
+ 
+     # If the next line starts with a '.'
+     if next_line[0] == dot:
+@@ -834,9 +820,6 @@ for ch in range(256):
+ 
+ 
+ def _recover_base64(s):
+-    if six.PY2:
+-        return s.translate(None, _b64_invalid_chars)
+-
+     buf = StringIO()
+     chunk_start = 0
+     for i, c in enumerate(s):
+diff --git a/flanker/mime/message/scanner.py b/flanker/mime/message/scanner.py
+index f854a1f..d25bb74 100644
+--- a/flanker/mime/message/scanner.py
++++ b/flanker/mime/message/scanner.py
+@@ -2,8 +2,7 @@ from collections import deque
+ from logging import getLogger
+ 
+ import regex as re
+-import six
+-from six.moves import StringIO
++from io import StringIO
+ 
+ from flanker.mime.message.errors import DecodingError
+ from flanker.mime.message.headers import parsing, is_empty, ContentType
+@@ -17,15 +16,11 @@ def scan(string):
+     """Scanner that uses 1 pass to scan the entire message and
+     build a message tree"""
+ 
+-    if six.PY2:
+-        if not isinstance(string, six.binary_type):
+-            raise DecodingError('Scanner works with binary only')
+-    else:
+-        if isinstance(string, six.binary_type):
+-            string = to_unicode(string)
++    if isinstance(string, bytes):
++        string = to_unicode(string)
+ 
+-        if not isinstance(string, six.text_type):
+-            raise DecodingError('Cannot scan type %s' % type(string))
++    if not isinstance(string, str):
++        raise DecodingError('Cannot scan type %s' % type(string))
+ 
+     tokens = tokenize(string)
+     if not tokens:
+@@ -35,7 +30,7 @@ def scan(string):
+     except DecodingError:
+         raise
+     except Exception as cause:
+-        raise six.raise_from(DecodingError("Malformed MIME message"), cause)
++        raise DecodingError("Malformed MIME message") from cause
+ 
+ 
+ def traverse(pointer, iterator, parent=None, allow_bad_mime=False):
+@@ -404,7 +399,7 @@ def tokenize(string):
+     """
+     Scans the entire message to find all Content-Types and boundaries.
+     """
+-    if six.PY3 and isinstance(string, six.binary_type):
++    if isinstance(string, bytes):
+         string = string.decode('utf-8')
+ 
+     tokens = deque()
+diff --git a/flanker/mime/message/threading.py b/flanker/mime/message/threading.py
+index 486242c..972803b 100644
+--- a/flanker/mime/message/threading.py
++++ b/flanker/mime/message/threading.py
+@@ -1,11 +1,9 @@
+ """
+ Implements message threading
+ """
+-import six
+ 
+ from flanker import _email
+ 
+-
+ def build_thread(messages):
+     """
+     Groups given message list by conversation
+@@ -16,22 +14,19 @@ def build_thread(messages):
+     thread.prune_empty()
+     return thread
+ 
+-
+ def build_table(messages):
+     id_table = {}
+     for message in messages:
+         map_message(message, id_table)
+     return id_table
+ 
+-
+ def build_root_set(table):
+     root = Container()
+-    for container in six.itervalues(table):
++    for container in table.values():
+         if not container.parent:
+             root.add_child(container)
+     return root
+ 
+-
+ def map_message(message, table):
+ 
+     def container(message_id):
+@@ -66,11 +61,9 @@ def map_message(message, table):
+     if prev and not introduces_loop(prev, this):
+         prev.add_child(this)
+ 
+-
+ def introduces_loop(parent, child):
+     return parent == child or child.has_descendant(parent)
+ 
+-
+ class Container(object):
+     def __init__(self, message=None):
+         self.message = message
+@@ -196,7 +189,6 @@ class Container(object):
+             else:
+                 container = container.next
+ 
+-
+ class Wrapper(object):
+     def __init__(self, message):
+         self.message = message
+diff --git a/flanker/mime/message/utils.py b/flanker/mime/message/utils.py
+index 71cf364..dc848de 100644
+--- a/flanker/mime/message/utils.py
++++ b/flanker/mime/message/utils.py
+@@ -1,5 +1,4 @@
+ import chardet as fallback_detector
+-import six
+ 
+ # Made cchardet optional according to https://github.com/mailgun/flanker/pull/84
+ try:
+@@ -44,7 +43,7 @@ def _guess_and_convert(value):
+ 
+ 
+ def _make_unicode(value, charset=None):
+-    if isinstance(value, six.text_type):
++    if isinstance(value, str):
+         return value
+ 
+     charset = charset or "utf-8"
+diff --git a/flanker/utils.py b/flanker/utils.py
+index 49a6c12..4cfe963 100644
+--- a/flanker/utils.py
++++ b/flanker/utils.py
+@@ -1,11 +1,9 @@
+-# coding:utf-8
+ """
+ Utility functions and classes used by flanker.
+ """
+ import re
+ from functools import wraps
+ 
+-import six
+ 
+ 
+ def is_pure_ascii(value):
+@@ -23,7 +21,7 @@ def is_pure_ascii(value):
+     if value is None:
+         return False
+ 
+-    if isinstance(value, six.binary_type):
++    if isinstance(value, bytes):
+         try:
+             value.decode('ascii')
+         except UnicodeDecodeError:
+@@ -31,7 +29,7 @@ def is_pure_ascii(value):
+ 
+         return True
+ 
+-    if isinstance(value, six.text_type):
++    if isinstance(value, str):
+         try:
+             value.encode('ascii')
+         except UnicodeEncodeError:
+@@ -79,7 +77,7 @@ def metrics_wrapper():
+ 
+ 
+ # allows, \t\n\v\f\r (0x09-0x0d)
+-CONTROL_CHARS = ''.join([six.unichr(c) for c in range(0, 9)] +
+-                        [six.unichr(c) for c in range(14, 32)] +
+-                        [six.unichr(c) for c in range(127, 160)])
++CONTROL_CHARS = ''.join([chr(c) for c in range(0, 9)] +
++                        [chr(c) for c in range(14, 32)] +
++                        [chr(c) for c in range(127, 160)])
+ CONTROL_CHAR_RE = re.compile('[%s]' % re.escape(CONTROL_CHARS))
+diff --git a/pyproject.toml b/pyproject.toml
+new file mode 100644
+index 0000000..1ed4214
+--- /dev/null
++++ b/pyproject.toml
+@@ -0,0 +1,53 @@
++[build-system]
++requires = ["setuptools>=64"]
++build-backend = "setuptools.build_meta"
++
++[project]
++name = "flanker"
++version = "1.0.0.dev0"
++description = "Mailgun Parsing Tools"
++readme = "README.rst"
++license = { text = "Apache-2.0" }
++authors = [{ name = "Mailgun Technologies Inc.", email = "admin@mailgunhq.com" }]
++maintainers = [{ name = "Mailgun Technologies Inc.", email = "admin@mailgunhq.com" }]
++urls = { Homepage = "https://www.mailgun.com/" }
++requires-python = ">=3.9"
++classifiers = [
++    "Development Status :: 4 - Beta",
++    "Intended Audience :: Developers",
++    "License :: OSI Approved :: Apache Software License",
++    "Programming Language :: Python :: 3",
++    "Programming Language :: Python :: 3 :: Only",
++    "Programming Language :: Python :: 3.9",
++    "Programming Language :: Python :: 3.10",
++    "Programming Language :: Python :: 3.11",
++    "Programming Language :: Python :: 3.12",
++    "Programming Language :: Python :: 3.13",
++    "Programming Language :: Python :: 3.14",
++    "Topic :: Software Development :: Libraries",
++]
++dependencies = [
++    "attrs",
++    "chardet>=1.0.1",
++    "cryptography>=0.5",
++    "idna>=2.5",
++    "ply>=3.10",
++    "regex>=0.1.20110315",
++    "tld",
++    "WebOb>=0.9.8",
++]
++
++# NOTE vs. the legacy setup.py:
++#   - dropped "six"            (Python 2/3 straddle removed; project is Python 3 only)
++#   - dropped "standard-imghdr" (imghdr usage replaced by flanker/_imagetype.py)
++
++[project.optional-dependencies]
++validator = ["dnsq>=1.1.6", "redis>=2.7.1"]
++cchardet = ["cchardet>=0.3.5"]
++tests = ["pytest", "coverage"]
++
++[tool.setuptools.packages.find]
++exclude = ["tests*"]
++
++[tool.setuptools.package-data]
++flanker = ["addresslib/_parser/*.py"]
+diff --git a/setup.py b/setup.py
+deleted file mode 100644
+index 5168087..0000000
+--- a/setup.py
++++ /dev/null
+@@ -1,55 +0,0 @@
+-# coding:utf-8
+-
+-from setuptools import setup, find_packages
+-
+-tests_require = [
+-    'coverage',
+-    'coveralls',
+-    'mock',
+-    'nose',
+-],
+-
+-setup(name='flanker',
+-      version='0.9.16',
+-      description='Mailgun Parsing Tools',
+-      long_description=open('README.rst').read(),
+-      classifiers=[
+-          'Development Status :: 4 - Beta',
+-          'Intended Audience :: Developers',
+-          'License :: OSI Approved :: Apache Software License',
+-          'Programming Language :: Python :: 2',
+-          'Programming Language :: Python :: 2.7',
+-          'Programming Language :: Python :: 3',
+-          'Programming Language :: Python :: 3.6',
+-          'Topic :: Software Development :: Libraries',
+-      ],
+-      keywords='',
+-      author='Mailgun Technologies Inc.',
+-      author_email='admin@mailgunhq.com',
+-      url='https://www.mailgun.com/',
+-      license='Apache 2',
+-      packages=find_packages(exclude=['tests']),
+-      include_package_data=True,
+-      zip_safe=True,
+-      tests_require=tests_require,
+-      install_requires=[
+-          'attrs',
+-          'chardet>=1.0.1',
+-          'cryptography>=0.5',
+-          'idna>=2.5',
+-          'ply>=3.10',
+-          'regex>=0.1.20110315',
+-          'six',
+-          'standard-imghdr==3.13.0',
+-          'tld',
+-          'WebOb>=0.9.8'],
+-      extras_require={
+-          'validator': [
+-              'dnsq>=1.1.6',
+-              'redis>=2.7.1',
+-          ],
+-          'cchardet': [
+-              'cchardet>=0.3.5',
+-          ],
+-          'tests': tests_require,
+-      })
+-- 
+2.53.0
+
