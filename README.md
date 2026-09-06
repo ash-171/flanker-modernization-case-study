@@ -12,9 +12,9 @@ address + MIME parsing library (~7k LOC, ~24k downloads/month, no release since
 · [diff vs upstream](https://github.com/ash-171/flanker/compare/master...modernize)
 (a fork; this repo is the analysis + verification around it).
 
-![Golden-master reproduce: bash modernization/run.sh builds the pristine and modernized libraries and confirms byte-identical output on Python 3.11 and 3.14](modernization/flanker-golden-master.gif)
+![flanker demo: the library parses a mixed address list, converts an internationalized address to punycode, rejects junk, walks a MIME message with a PDF attachment and round-trips it, and scores a bounce — then the same script produces byte-identical output on the pristine library and on Python 3.14](modernization/flanker-demo.gif)
 
-<sub>`bash modernization/run.sh` — clean rebuild of both libraries, characterize the corpus, diff. ([asciicast](modernization/flanker-golden-master.cast))</sub>
+<sub>`bash modernization/demo-both.sh` — flanker's own API (address parsing, MIME walk, bounce scoring) running on the **modernized** code, then the same script's output shown byte-identical against the pristine library and on Python 3.14. ([asciicast](modernization/flanker-demo.cast)) · The verification harness behind the "IDENTICAL" claim is [`run.sh`](modernization/run.sh) ([clip](modernization/flanker-golden-master.gif)).</sub>
 
 ---
 
@@ -75,6 +75,7 @@ workflow — adapted to a small, same-language job. See
 | `modernization/harness/characterize.py` | Runs flanker's public API over the corpus → deterministic golden-master JSON. |
 | `modernization/harness/compare.py` | Structural diff of two golden-master files. |
 | `modernization/run.sh` | One command: build both versions, characterize, compare. |
+| `modernization/demo.py` · `demo-both.sh` | A readable tour of flanker's API (address parsing, MIME walk, bounce scoring); `demo-both.sh` runs it on the modernized code and shows the output is byte-identical to the pristine library and on Python 3.14. |
 | `modernization/golden/*.json` | Captured outputs (original + modernized, Python 3.11 + 3.14). |
 | `modernization/patches/` | The modernization as a git patch + a plain diff. |
 | `CLAUDE.md` | Working notes for AI coding assistants on this repo. |

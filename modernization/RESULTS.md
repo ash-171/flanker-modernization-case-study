@@ -135,6 +135,11 @@ bash modernization/run.sh
 [`flanker-golden-master.gif`](flanker-golden-master.gif) ·
 [`flanker-golden-master.cast`](flanker-golden-master.cast) (asciicast v2).
 
+For a feature-level view — flanker's address / MIME / bounce API in action on
+the modernized code, then shown byte-identical to the pristine library and on
+Python 3.14 — see [`demo.py`](demo.py) + [`demo-both.sh`](demo-both.sh)
+([`flanker-demo.gif`](flanker-demo.gif) · [`.cast`](flanker-demo.cast)).
+
 or manually:
 
 ```bash
