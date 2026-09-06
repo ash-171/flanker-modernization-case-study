@@ -71,6 +71,7 @@ workflow — adapted to a small, same-language job. See
 | --- | --- |
 | [`CASE_STUDY.md`](CASE_STUDY.md) | The full analysis: why flanker, evidence of staleness, the GenAI method applied (§10), the prioritized roadmap. |
 | [`modernization/RESULTS.md`](modernization/RESULTS.md) | Run write-ups — run 1 (drop Python 2 / `six` / `setup.py`) and run 2 (`nose`→`pytest`): exactly what changed and every comparison result. |
+| [`writeup/blog-draft.md`](writeup/blog-draft.md) | Narrative write-up (draft): the problem, the golden-master approach, and how the work was done in Claude Code. |
 | `modernization/harness/characterize.py` | Runs flanker's public API over the corpus → deterministic golden-master JSON. |
 | `modernization/harness/compare.py` | Structural diff of two golden-master files. |
 | `modernization/run.sh` | One command: build both versions, characterize, compare. |
