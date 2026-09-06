@@ -20,9 +20,12 @@ This is a **code-modernization case study**, not an application. It contains:
   "golden master"; `harness/compare.py` diffs two such files; `run.sh`
   reproduces the whole thing. `golden/*.json` are the captured outputs.
 - `repos/flanker-modern/` — a git worktree of `repos/flanker` on branch
-  `modernize` holding the modernized code (commit `8733780`: `six` removed,
-  `imghdr`→`flanker/_imagetype.py`, `setup.py`→`pyproject.toml`). Its output is
+  `modernize` holding the modernized code. Run 1 (`six` removed,
+  `imghdr`→`flanker/_imagetype.py`, `setup.py`→`pyproject.toml`): output is
   byte-identical to `repos/flanker` across the corpus on Python 3.11 and 3.14.
+  Run 2 / Phase 0 (`nose`→`pytest`): the test suite now runs green under
+  `pytest` on Python 3.11 and 3.14 (`255 passed, 6 skipped, 5 xfailed`); only
+  `tests/` + CI config changed, so run 1's golden-master result is unaffected.
   This branch is published to the fork **`ash-171/flanker`** (remote `fork` in
   `repos/flanker`); `mailgun/flanker` is upstream `origin`.
 
@@ -81,7 +84,7 @@ import on Python 3.12+. From `repos/flanker/`:
 | --- | --- |
 | Create env + install (with extras + test deps) | `python -m venv .venv && . .venv/bin/activate && pip install -e '.[cchardet,validator,tests]'` |
 | Run tests (as upstream intends) | `nosetests --with-coverage --cover-package=flanker` |
-| Run tests on modern Python | not possible without first porting `nose` → `pytest` (see `CASE_STUDY.md` §6, item 1) |
+| Run tests on modern Python | not possible in `repos/flanker/` without first porting `nose` → `pytest` (see `CASE_STUDY.md` §6, item 1). Done on the fork: `cd repos/flanker-modern && pytest` (Phase 0 — see `modernization/RESULTS.md` run 2). |
 | Full matrix | `tox` (envs: `py27`, `py36` only) |
 | Lint / format | none configured upstream — adding `ruff` is part of the modernization scope |
 
