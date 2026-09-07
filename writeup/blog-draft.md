@@ -204,7 +204,10 @@ safe as the oracle you check it against.
 ## Honesty box
 
 - This is a **personal exercise**. It is not merged, adopted, or endorsed by
-  Mailgun.
+  Mailgun. The one slice that stands on its own — dropping the `standard-imghdr`
+  dependency — is filed upstream as
+  [mailgun/flanker#275](https://github.com/mailgun/flanker/pull/275), but the
+  repo has years of unreviewed PRs, so that's "submitted," not "landed."
 - **"Byte-identical across the corpus"** is strong empirical evidence over ~428
   cases — it is not a formal proof of equivalence. A behavior not exercised by
   a fixture is not covered.

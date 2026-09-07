@@ -39,7 +39,8 @@ Changes made (`+259 / −300` lines across 30 files, [full diff](modernization/p
   the Python 3 arm.
 - **Replaced `imghdr`** (removed from the stdlib in Python 3.13; flanker had
   pinned the `standard-imghdr` backport) with a faithful ~100-line port,
-  `flanker/_imagetype.py`.
+  `flanker/_imagetype.py`. This one change is also offered upstream as a
+  self-contained PR: [mailgun/flanker#275](https://github.com/mailgun/flanker/pull/275).
 - **`setup.py` → `pyproject.toml`** (PEP 621), `requires-python = ">=3.9"`.
 - Install-time dependencies: **13 → 11**.
 
@@ -122,7 +123,11 @@ python modernization/harness/compare.py \
 ## Scope & honesty
 
 - This is a **personal modernization exercise**. It is **not merged, adopted, or
-  endorsed** by Mailgun.
+  endorsed** by Mailgun. One self-contained slice (drop the `standard-imghdr`
+  dependency) is offered upstream as
+  [mailgun/flanker#275](https://github.com/mailgun/flanker/pull/275); the repo
+  has a long backlog of unreviewed PRs, so treat that as "submitted", not
+  "accepted".
 - **Phases 0–1** are done: the `nose`→`pytest` port (suite now runs green on
   Python 3.11 and 3.14 — `255 passed, 6 skipped, 5 xfailed`) and the mechanical
   "translation" slice (drop Python 2, remove `six`, `setup.py`→`pyproject.toml`).

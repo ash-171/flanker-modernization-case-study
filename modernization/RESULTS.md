@@ -41,7 +41,7 @@ Commit `8733780` — **+259 / −300 lines across 30 files**, no behavior change
 | Change | Detail |
 | --- | --- |
 | **Removed `six` entirely** | Was imported in 19 modules (~120 call sites). `six.text_type`→`str`, `six.binary_type`→`bytes`, `six.string_types`→`str`, `six.unichr`→`chr`, `six.moves.StringIO`/`six.StringIO`→`io.StringIO`, `six.BytesIO`→`io.BytesIO`, `six.moves.range`→builtin, `six.moves.urllib_parse`→`urllib.parse`, `six.iteritems`/`six.itervalues`→`.items()`/`.values()`, `six.raise_from(e, c)`→`raise e from c`. All `if six.PY2` / `if six.PY3` branches collapsed to the Python 3 arm. |
-| **Replaced `imghdr`** | `imghdr` was removed from the stdlib in Python 3.13; flanker had pinned the `standard-imghdr` backport. Now `flanker/_imagetype.py` — a faithful port of CPython `imghdr`'s recogniser set (jpeg/png/gif/tiff/rgb/pbm/pgm/ppm/bmp/webp/exr), same return values. |
+| **Replaced `imghdr`** | `imghdr` was removed from the stdlib in Python 3.13; flanker had pinned the `standard-imghdr` backport. Now `flanker/_imagetype.py` — a faithful port of CPython `imghdr`'s recogniser set (jpeg/png/gif/tiff/rgb/pbm/pgm/ppm/bmp/webp/exr), same return values. Offered upstream as a stand-alone PR: [mailgun/flanker#275](https://github.com/mailgun/flanker/pull/275). |
 | **`setup.py` → `pyproject.toml`** | PEP 621 metadata; `requires-python = ">=3.9"`; `six` and `standard-imghdr` dropped from dependencies; classifiers updated to Python 3.9–3.14, "3 :: Only". |
 | **Stripped `# coding:` headers** | 11 files; unnecessary since Python 3. |
 
